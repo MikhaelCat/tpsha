@@ -9,5 +9,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копирование кода
 COPY . .
 
-# Команда по умолчанию (переопределяется в docker-compose)
+# Команда по умолчанию 
 CMD ["python", "main.py"]
