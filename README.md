@@ -30,4 +30,4 @@
 1. Клонируйте этот репозиторий
 2. Создайте файл `.env` на основе `.env_example`:
    ```bash
-   cp .env_example .env
+   cp .env_example .env# tpsha
