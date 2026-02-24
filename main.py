@@ -3,7 +3,6 @@ import logging
 import os
 import re
 import aiohttp
-import json
 from typing import Optional
 
 import asyncpg
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 DB_USER = os.getenv("POSTGRES_USER", "postgres")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
 DB_NAME = os.getenv("POSTGRES_DB", "video_stats")
-DB_HOST = os.getenv("POSTGRES_HOST", "db")  # В Docker имя сервиса 'db'
+DB_HOST = os.getenv("POSTGRES_HOST", "db")
 DB_PORT = os.getenv("POSTGRES_PORT", "5432")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -67,7 +66,6 @@ SQL:"""
                     if response.status == 200:
                         data = await response.json()
                         sql = data["choices"][0]["message"]["content"].strip()
-                        # Очистка от маркеров кода если модель их добавит
                         sql = re.sub(r'```sql\s*', '', sql)
                         sql = re.sub(r'```', '', sql)
                         return sql.strip()
@@ -79,46 +77,79 @@ SQL:"""
             return None
 
 class QueryParser:
-    """Резервный парсер на основе правил (если API недоступен)"""
+    """
+    Усиленный парсер на основе правил.
+    Покрывает все типы запросов из тестового задания.
+    """
     
     @staticmethod
     def parse_date(date_str: str) -> Optional[str]:
+        """Преобразование русской даты в формат YYYY-MM-DD"""
+        if not date_str:
+            return None
+            
         months = {
             'января': '01', 'февраля': '02', 'марта': '03', 'апреля': '04',
             'мая': '05', 'июня': '06', 'июля': '07', 'августа': '08',
             'сентября': '09', 'октября': '10', 'ноября': '11', 'декабря': '12'
         }
-        match = re.search(r'(\d{1,2})\s+(' + '|'.join(months.keys()) + r')\s+(\d{4})', date_str.lower())
+        
+        date_str = date_str.strip().lower()
+        
+        # Паттерн: "28 ноября 2025"
+        match = re.search(r'(\d{1,2})\s+(' + '|'.join(months.keys()) + r')\s+(\d{4})', date_str)
         if match:
             day = match.group(1).zfill(2)
             month = months[match.group(2)]
             year = match.group(3)
             return f"{year}-{month}-{day}"
+        
         return None
 
     def parse_query(self, query: str) -> Optional[str]:
-        q = query.lower()
+        """Анализ запроса и возврат SQL"""
+        q = query.lower().strip()
         
+        # 1. "Сколько всего видео есть в системе?"
         if "сколько всего видео" in q:
             return "SELECT COUNT(*) FROM videos"
         
+        # 2. "Сколько видео у креатора с id ... вышло с ... по ... включительно?"
         if "сколько видео у креатора" in q and "вышло" in q:
             creator_match = re.search(r'id\s*([a-zA-Z0-9_-]+)', q)
             if creator_match:
                 creator_id = creator_match.group(1)
+                
+                # Ищем диапазон дат (с ... по ...)
                 date_range_match = re.search(r'с\s+(.+?)\s+по\s+(.+?)\s+(?:включительно|за)', q)
                 if date_range_match:
                     date_from = self.parse_date(date_range_match.group(1))
                     date_to = self.parse_date(date_range_match.group(2))
                     if date_from and date_to:
                         return f"SELECT COUNT(*) FROM videos WHERE creator_id = '{creator_id}' AND DATE(video_created_at) BETWEEN '{date_from}' AND '{date_to}'"
+                
+                # Или одну дату
+                single_date_match = re.search(r'(\d{1,2}\s+\w+\s+\d{4})', q)
+                if single_date_match:
+                    date = self.parse_date(single_date_match.group(1))
+                    if date:
+                        return f"SELECT COUNT(*) FROM videos WHERE creator_id = '{creator_id}' AND DATE(video_created_at) = '{date}'"
         
+        # 3. "Сколько видео набрало больше X просмотров за всё время?"
         if "набрало больше" in q and "просмотров" in q:
             view_match = re.search(r'(\d+)\s+просмотров', q)
             if view_match:
                 threshold = int(view_match.group(1))
                 return f"SELECT COUNT(*) FROM videos WHERE views_count > {threshold}"
         
+        # 4. "Сколько видео набрало больше X лайков за всё время?"
+        if "набрало больше" in q and "лайков" in q:
+            like_match = re.search(r'(\d+)\s+лайков', q)
+            if like_match:
+                threshold = int(like_match.group(1))
+                return f"SELECT COUNT(*) FROM videos WHERE likes_count > {threshold}"
+        
+        # 5. "На сколько просмотров в сумме выросли все видео [дата]?"
         if ("на сколько" in q or "сумме" in q) and "выросли" in q and "просмотров" in q:
             date_match = re.search(r'(\d{1,2}\s+\w+\s+\d{4})', q)
             if date_match:
@@ -126,6 +157,15 @@ class QueryParser:
                 if date:
                     return f"SELECT SUM(delta_views_count) FROM video_snapshots WHERE DATE(created_at) = '{date}'"
         
+        # 6. "На сколько лайков в сумме выросли все видео [дата]?"
+        if ("на сколько" in q or "сумме" in q) and "выросли" in q and "лайков" in q:
+            date_match = re.search(r'(\d{1,2}\s+\w+\s+\d{4})', q)
+            if date_match:
+                date = self.parse_date(date_match.group(1))
+                if date:
+                    return f"SELECT SUM(delta_likes_count) FROM video_snapshots WHERE DATE(created_at) = '{date}'"
+        
+        # 7. "Сколько разных видео получали новые просмотры [дата]?"
         if "сколько разных видео" in q and "новые просмотры" in q:
             date_match = re.search(r'(\d{1,2}\s+\w+\s+\d{4})', q)
             if date_match:
@@ -133,10 +173,26 @@ class QueryParser:
                 if date:
                     return f"SELECT COUNT(DISTINCT video_id) FROM video_snapshots WHERE DATE(created_at) = '{date}' AND delta_views_count > 0"
         
+        # 8. "Сколько разных видео получали новые лайки [дата]?"
+        if "сколько разных видео" in q and "новые лайки" in q:
+            date_match = re.search(r'(\d{1,2}\s+\w+\s+\d{4})', q)
+            if date_match:
+                date = self.parse_date(date_match.group(1))
+                if date:
+                    return f"SELECT COUNT(DISTINCT video_id) FROM video_snapshots WHERE DATE(created_at) = '{date}' AND delta_likes_count > 0"
+        
+        # 9. "Сколько всего просмотров набрали все видео?"
+        if "сколько всего просмотров" in q:
+            return "SELECT SUM(views_count) FROM videos"
+        
+        # 10. "Сколько всего лайков набрали все видео?"
+        if "сколько всего лайков" in q:
+            return "SELECT SUM(likes_count) FROM videos"
+        
         return None
 
 class VideoStatsBot:
-    def __init__(self): 
+    def __init__(self):
         self.bot = Bot(token=BOT_TOKEN)
         self.dp = Dispatcher()
         self.db_pool = None
@@ -193,20 +249,25 @@ SQL: SELECT SUM(delta_views_count) FROM video_snapshots WHERE DATE(created_at) =
 
     async def process_query(self, query: str) -> int:
         sql = None
+        method_used = "PARSER"
         
-        # Сначала пробуем через LLM
+        # Сначала пробуем через LLM (если есть ключ)
         if self.llm:
             sql = await self.llm.generate_sql(query, self.schema_info, self.examples)
-            logger.info(f"LLM сгенерировал SQL: {sql}")
+            if sql:
+                method_used = "DEEPSEEK API"
+            else:
+                logger.warning("DeepSeek не вернул SQL, переключаемся на парсер")
         
-        # Если LLM не сработал — используем резервный парсер
+        # Если LLM не сработал — используем парсер
         if not sql:
-            logger.warning("LLM не вернул SQL, используем резервный парсер")
             sql = self.parser.parse_query(query)
         
         if not sql:
             logger.warning(f"Не удалось распарсить запрос: {query}")
             return 0
+        
+        logger.info(f"[{method_used}] SQL: {sql}")
         
         try:
             async with self.db_pool.acquire() as conn:
@@ -225,7 +286,8 @@ SQL: SELECT SUM(delta_views_count) FROM video_snapshots WHERE DATE(created_at) =
                 "- Сколько всего видео есть в системе?\n"
                 "- Сколько видео у креатора с id ... вышло с 1 ноября 2025 по 5 ноября 2025?\n"
                 "- Сколько видео набрало больше 100000 просмотров?\n"
-                "- На сколько просмотров выросли все видео 28 ноября 2025?"
+                "- На сколько просмотров выросли все видео 28 ноября 2025?\n"
+                "- Сколько разных видео получали новые просмотры 27 ноября 2025?"
             )
         
         @self.dp.message()
@@ -257,5 +319,5 @@ async def main():
     finally:
         await bot.close_db_connection()
 
-if __name__ == "__main__":  
+if __name__ == "__main__":
     asyncio.run(main())
