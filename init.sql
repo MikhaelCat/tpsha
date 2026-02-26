@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS video_snapshots (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- Индексы для ускорения поиска
+-- Создание индексов для улучшения производительности
 CREATE INDEX IF NOT EXISTS idx_videos_creator_id ON videos(creator_id);
 CREATE INDEX IF NOT EXISTS idx_videos_video_created_at ON videos(video_created_at);
 CREATE INDEX IF NOT EXISTS idx_video_snapshots_video_id ON video_snapshots(video_id);

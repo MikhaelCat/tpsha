@@ -1,6 +1,4 @@
-"""
-Скрипт для загрузки данных о видео из JSON-файла в базу данных PostgreSQL
-"""
+"""Скрипт для загрузки данных о видео из JSON-файла в базу данных PostgreSQL"""
 import json
 import asyncio
 import asyncpg
@@ -8,12 +6,13 @@ import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-def parse_datetime(date_str: str) -> Optional[datetime]:
-    """Преобразование ISO-строки в datetime объект"""
+def parse_iso_datetime(date_str: Optional[str]) -> Optional[datetime]:
+    """Парсинг ISO-формата даты с поддержкой timezone"""
     if not date_str:
         return None
+    date_str = date_str.replace('Z', '+00:00')
+
     try:
-        date_str = date_str.replace('Z', '+00:00')
         return datetime.fromisoformat(date_str)
     except (ValueError, AttributeError):
         return None
@@ -21,9 +20,14 @@ def parse_datetime(date_str: str) -> Optional[datetime]:
 async def load_videos_to_db(db_pool: asyncpg.Pool, videos_data: List[Dict[Any, Any]]):
     """Загрузка данных о видео в базу данных"""
     print(f"Загрузка {len(videos_data)} видео в базу данных...")
+    
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             for i, video in enumerate(videos_data):
+                video_created_at = parse_iso_datetime(video.get('video_created_at'))
+                created_at = parse_iso_datetime(video.get('created_at'))
+                updated_at = parse_iso_datetime(video.get('updated_at'))
+                
                 await conn.execute("""
                     INSERT INTO videos (
                         id, creator_id, video_created_at, views_count,
@@ -41,17 +45,20 @@ async def load_videos_to_db(db_pool: asyncpg.Pool, videos_data: List[Dict[Any, A
                 """,
                     str(video['id']),
                     str(video['creator_id']),
-                    parse_datetime(video['video_created_at']),
+                    video_created_at,
                     video.get('views_count', 0),
                     video.get('likes_count', 0),
                     video.get('comments_count', 0),
                     video.get('reports_count', 0),
-                    parse_datetime(video.get('created_at')),
-                    parse_datetime(video.get('updated_at'))
+                    created_at,
+                    updated_at
                 )
                 
                 snapshots = video.get('snapshots', [])
                 for snapshot in snapshots:
+                    snap_created_at = parse_iso_datetime(snapshot.get('created_at'))
+                    snap_updated_at = parse_iso_datetime(snapshot.get('updated_at'))
+                    
                     await conn.execute("""
                         INSERT INTO video_snapshots (
                             id, video_id, views_count, likes_count,
@@ -82,12 +89,14 @@ async def load_videos_to_db(db_pool: asyncpg.Pool, videos_data: List[Dict[Any, A
                         snapshot.get('delta_likes_count', 0),
                         snapshot.get('delta_comments_count', 0),
                         snapshot.get('delta_reports_count', 0),
-                        parse_datetime(snapshot.get('created_at')),
-                        parse_datetime(snapshot.get('updated_at'))
+                        snap_created_at,
+                        snap_updated_at
                     )
                 
                 if (i + 1) % 100 == 0:
                     print(f"Обработано {i + 1}/{len(videos_data)} видео...")
+    
+    print("Загрузка данных успешно завершена!")
 
 async def main():
     DB_USER = os.getenv("POSTGRES_USER", "postgres")
@@ -96,7 +105,7 @@ async def main():
     DB_HOST = os.getenv("POSTGRES_HOST", "db")
     DB_PORT = os.getenv("POSTGRES_PORT", "5432")
     
-    print("Подключение к базе данных...")
+    print("🔌 Подключение к базе данных...")
     db_pool = await asyncpg.create_pool(
         host=DB_HOST, port=DB_PORT, user=DB_USER,
         password=DB_PASSWORD, database=DB_NAME
@@ -107,11 +116,10 @@ async def main():
         with open('/tmp/videos.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        videos_data = data['videos']
+        videos_data = data.get('videos', [])
         print(f"Найдено {len(videos_data)} видео в JSON-файле")
         
         await load_videos_to_db(db_pool, videos_data)
-        print("Загрузка данных успешно завершена!")
     
     except Exception as e:
         print(f"Ошибка во время загрузки данных: {e}")
