@@ -82,6 +82,9 @@ SQL: SELECT COUNT(DISTINCT video_id) FROM video_snapshots WHERE DATE(created_at)
             return False
 
     async def process_query(self, query: str) -> Tuple[int, bool, str]:
+        if not query:
+            return 0, False, MESSAGES['invalid_intent']
+    
         logger.info(f"Получен запрос: {query[:100]}")
         
         # проверка длины

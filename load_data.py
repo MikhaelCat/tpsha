@@ -105,7 +105,7 @@ async def main():
     DB_HOST = os.getenv("POSTGRES_HOST", "db")
     DB_PORT = os.getenv("POSTGRES_PORT", "5432")
     
-    print("🔌 Подключение к базе данных...")
+    print("Подключение к базе данных...")
     db_pool = await asyncpg.create_pool(
         host=DB_HOST, port=DB_PORT, user=DB_USER,
         password=DB_PASSWORD, database=DB_NAME
